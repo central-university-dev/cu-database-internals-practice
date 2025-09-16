@@ -8,6 +8,7 @@ import ru.tbank.di.replacer.FifoReplacer;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class MinimalBufferManager implements BufferManager {
@@ -16,8 +17,8 @@ public class MinimalBufferManager implements BufferManager {
     private final FifoReplacer replacer = new FifoReplacer();
     private final int capacity = 3;
 
-    private static class PageDescriptor {
-        final int pageId;
+    public static class PageDescriptor {
+        public final int pageId;
         Page page;
         int usageCount = 0;
         int pinCount = 0;
@@ -105,5 +106,31 @@ public class MinimalBufferManager implements BufferManager {
             }
             io.writePage((HeapPage) victim.page);
         }
+    }
+
+    public void flushAllDirty() throws IOException {
+        for (PageDescriptor desc : getDirtyPages()) {
+            if (!(desc.page instanceof HeapPage)) {
+                throw new IllegalArgumentException("Dirty page is not a HeapPage: " + desc.pageId);
+            }
+            io.writePage((HeapPage) desc.page);
+            desc.isDirty = false;
+        }
+    }
+
+    public void flushPage(int pageId) throws IOException {
+        PageDescriptor desc = store.get(pageId);
+        if (desc == null) {
+            throw new IllegalArgumentException("Page not found in buffer: " + pageId);
+        }
+        if (!(desc.page instanceof HeapPage)) {
+            throw new IllegalArgumentException("Dirty page is not a HeapPage: " + desc.pageId);
+        }
+        io.writePage((HeapPage) desc.page);
+        desc.isDirty = false;
+    }
+
+    public List<PageDescriptor> getDirtyPages() {
+        return store.values().stream().filter(pageDescriptor -> pageDescriptor.isDirty).toList();
     }
 }
