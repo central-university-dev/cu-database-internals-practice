@@ -10,21 +10,68 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class MinimalBufferManager implements BufferManager {
-    private final Map<Integer, Page> store = new HashMap<>();
+    private final Map<Integer, PageDescriptor> store = new HashMap<>();
     private final HeapFileIO io = new HeapFileIO(Path.of("data.heap"));
 
-    @Override
-    public Page get(int pid) throws IOException {
-        if (!store.containsKey(pid)) {
-            Page page = io.readPage(pid);
-            store.put(pid, page);
+    private static class PageDescriptor {
+        final int pageId;
+        Page page;
+        int usageCount = 0;
+        int pinCount = 0;
+        boolean isDirty = false;
+
+        PageDescriptor(int pageId, Page page) {
+            this.pageId = pageId;
+            this.page = page;
         }
-        return store.get(pid);
     }
 
     @Override
-    public void write(int pid, HeapPage page) throws IOException {
-        store.put(pid, page);
+    public Page get(int pageId) throws IOException {
+        PageDescriptor desc = store.get(pageId);
+
+        if (desc == null) {
+            Page page = io.readPage(pageId);
+            desc = new PageDescriptor(pageId, page);
+            store.put(pageId, desc);
+        }
+
+        desc.usageCount++;
+        return desc.page;
+    }
+
+    @Override
+    public void write(int pageId, HeapPage page) throws IOException {
+        PageDescriptor desc = store.get(pageId);
+
+        if (desc == null) {
+            desc = new PageDescriptor(pageId, page);
+            store.put(pageId, desc);
+        } else {
+            desc.page = page;
+        }
+
+        desc.isDirty = true;
         io.writePage(page);
+    }
+
+    public void pin(int pageId) {
+        PageDescriptor desc = store.get(pageId);
+        if (desc == null) {
+            throw new IllegalArgumentException("Page not found in buffer: " + pageId);
+        }
+
+        desc.pinCount++;
+    }
+
+    public void unpin(int pageId) {
+        PageDescriptor desc = store.get(pageId);
+        if (desc == null) {
+            throw new IllegalArgumentException("Page not found in buffer: " + pageId);
+        }
+
+        if (desc.pinCount > 0) {
+            desc.pinCount--;
+        }
     }
 }
