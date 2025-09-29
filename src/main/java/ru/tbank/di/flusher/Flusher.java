@@ -33,7 +33,7 @@ public class Flusher {
                 try {
                     var dirtyPages = bm.getDirtyPages();
                     for (int i = 0; i < Math.min(dirtyPages.size(), maxDirtyPages); i++) {
-                        bm.flushPage(dirtyPages.get(i).pageId);
+                        bm.flushPage(dirtyPages.get(i).address);
                     }
                     Thread.sleep(flusherInterval);
                 } catch (IOException | InterruptedException e) {

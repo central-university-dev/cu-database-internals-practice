@@ -6,8 +6,8 @@ import ru.tbank.di.memory.Page;
 import java.io.IOException;
 
 public interface BufferManager {
-    Page get(int pageId) throws IOException;
-    void write(int pageId, HeapPage page) throws IOException;
-    void pin(int pageId);
-    void unpin(int pageId);
+    Page get(PageAddress address) throws IOException;
+    void write(PageAddress address, HeapPage page) throws IOException;
+    void pin(PageAddress address);
+    void unpin(PageAddress address);
 }

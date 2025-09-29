@@ -6,131 +6,173 @@ import ru.tbank.di.memory.Page;
 import ru.tbank.di.replacer.FifoReplacer;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class MinimalBufferManager implements BufferManager {
-    private final Map<Integer, PageDescriptor> store = new HashMap<>();
-    private final HeapFileIO io = new HeapFileIO(Path.of("data.heap"));
-    private final FifoReplacer replacer = new FifoReplacer();
-    private final int capacity = 3;
+    private final Map<PageAddress, PageDescriptor> store = new HashMap<>();
+    private final Map<Path, HeapFileIO> ioByPath = new HashMap<>();
+    private final FifoReplacer<PageAddress> replacer = new FifoReplacer<>();
+    private final int capacity;
 
-    public static class PageDescriptor {
-        public final int pageId;
-        Page page;
-        int usageCount = 0;
-        int pinCount = 0;
-        boolean isDirty = false;
+    public MinimalBufferManager() {
+        this(32);
+    }
 
-        PageDescriptor(int pageId, Page page) {
-            this.pageId = pageId;
-            this.page = page;
+    public MinimalBufferManager(int capacity) {
+        if (capacity <= 0) {
+            throw new IllegalArgumentException("capacity must be positive");
         }
+        this.capacity = capacity;
+    }
+
+    private HeapFileIO ioFor(Path file) throws IOException {
+        Path normalized = file.toAbsolutePath().normalize();
+        HeapFileIO io = ioByPath.get(normalized);
+        if (io == null) {
+            Path parent = normalized.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            if (!Files.exists(normalized)) {
+                Files.createFile(normalized);
+            }
+            io = new HeapFileIO(normalized);
+            ioByPath.put(normalized, io);
+        }
+        return io;
     }
 
     @Override
-    public Page get(int pageId) throws IOException {
-        PageDescriptor desc = store.get(pageId);
-
+    public synchronized Page get(PageAddress address) throws IOException {
+        PageDescriptor desc = store.get(address);
         if (desc == null) {
             ensureFrame();
-            Page page = io.readPage(pageId);
-            desc = new PageDescriptor(pageId, page);
-            replacer.add(pageId);
-            store.put(pageId, desc);
+            HeapPage page = loadPage(address);
+            desc = new PageDescriptor(address, page);
+            store.put(address, desc);
+            replacer.add(address);
         }
 
         desc.usageCount++;
         return desc.page;
     }
 
-    @Override
-    public void write(int pageId, HeapPage page) throws IOException {
-        PageDescriptor desc = store.get(pageId);
+    private HeapPage loadPage(PageAddress address) throws IOException {
+        HeapFileIO io = ioFor(address.file());
+        long requiredSize = (long) (address.pageId() + 1) * Page.PAGE_SIZE;
+        if (Files.size(address.file()) < requiredSize) {
+            return new HeapPage(address.pageId());
+        }
+        return io.readPage(address.pageId());
+    }
 
+    @Override
+    public synchronized void write(PageAddress address, HeapPage page) throws IOException {
+        PageDescriptor desc = store.get(address);
         if (desc == null) {
             ensureFrame();
-            desc = new PageDescriptor(pageId, page);
-            replacer.add(pageId);
-            store.put(pageId, desc);
+            desc = new PageDescriptor(address, page);
+            store.put(address, desc);
+            replacer.add(address);
         } else {
             desc.page = page;
         }
 
         desc.isDirty = true;
+        HeapFileIO io = ioFor(address.file());
         io.writePage(page);
     }
 
-    public void pin(int pageId) {
-        PageDescriptor desc = store.get(pageId);
+    @Override
+    public synchronized void pin(PageAddress address) {
+        PageDescriptor desc = store.get(address);
         if (desc == null) {
-            throw new IllegalArgumentException("Page not found in buffer: " + pageId);
+            throw new IllegalArgumentException("Page not found in buffer: " + address);
         }
-
-        replacer.remove(pageId);
+        replacer.remove(address);
         desc.pinCount++;
     }
 
-    public void unpin(int pageId) {
-        PageDescriptor desc = store.get(pageId);
+    @Override
+    public synchronized void unpin(PageAddress address) {
+        PageDescriptor desc = store.get(address);
         if (desc == null) {
-            throw new IllegalArgumentException("Page not found in buffer: " + pageId);
+            throw new IllegalArgumentException("Page not found in buffer: " + address);
         }
-
         if (desc.pinCount > 0) {
             desc.pinCount--;
+            if (desc.pinCount == 0) {
+                replacer.add(address);
+            }
         } else {
-            replacer.add(pageId);
+            replacer.add(address);
         }
     }
-
 
     private void ensureFrame() throws IOException {
         if (store.size() < capacity) return;
 
-        Integer victimId = replacer.evictCandidate();
-        if (victimId == null) {
+        PageAddress victimAddress = replacer.evictCandidate();
+        if (victimAddress == null) {
             throw new IOException("No free frame: all pages are pinned");
         }
 
-        PageDescriptor victim = store.remove(victimId);
+        PageDescriptor victim = store.remove(victimAddress);
         if (victim == null) {
             return;
         }
 
         if (victim.isDirty) {
-            if (!(victim.page instanceof HeapPage)) {
-                throw new IOException("Dirty page is not a HeapPage: " + victimId);
+            if (!(victim.page instanceof HeapPage heapPage)) {
+                throw new IOException("Dirty page is not a HeapPage: " + victimAddress);
             }
-            io.writePage((HeapPage) victim.page);
+            HeapFileIO io = ioFor(victimAddress.file());
+            io.writePage(heapPage);
+            victim.isDirty = false;
         }
     }
 
-    public void flushAllDirty() throws IOException {
+    public synchronized void flushAllDirty() throws IOException {
         for (PageDescriptor desc : getDirtyPages()) {
-            if (!(desc.page instanceof HeapPage)) {
-                throw new IllegalArgumentException("Dirty page is not a HeapPage: " + desc.pageId);
-            }
-            io.writePage((HeapPage) desc.page);
-            desc.isDirty = false;
+            flushDescriptor(desc);
         }
     }
 
-    public void flushPage(int pageId) throws IOException {
-        PageDescriptor desc = store.get(pageId);
+    public synchronized void flushPage(PageAddress address) throws IOException {
+        PageDescriptor desc = store.get(address);
         if (desc == null) {
-            throw new IllegalArgumentException("Page not found in buffer: " + pageId);
+            throw new IllegalArgumentException("Page not found in buffer: " + address);
         }
-        if (!(desc.page instanceof HeapPage)) {
-            throw new IllegalArgumentException("Dirty page is not a HeapPage: " + desc.pageId);
+        flushDescriptor(desc);
+    }
+
+    private void flushDescriptor(PageDescriptor desc) throws IOException {
+        if (!(desc.page instanceof HeapPage heapPage)) {
+            throw new IllegalArgumentException("Dirty page is not a HeapPage: " + desc.address);
         }
-        io.writePage((HeapPage) desc.page);
+        HeapFileIO io = ioFor(desc.address.file());
+        io.writePage(heapPage);
         desc.isDirty = false;
     }
 
-    public List<PageDescriptor> getDirtyPages() {
+    public synchronized List<PageDescriptor> getDirtyPages() {
         return store.values().stream().filter(pageDescriptor -> pageDescriptor.isDirty).toList();
+    }
+
+    public static class PageDescriptor {
+        public final PageAddress address;
+        Page page;
+        int usageCount = 0;
+        int pinCount = 0;
+        boolean isDirty = false;
+
+        PageDescriptor(PageAddress address, Page page) {
+            this.address = address;
+            this.page = page;
+        }
     }
 }

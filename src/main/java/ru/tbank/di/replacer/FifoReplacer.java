@@ -1,23 +1,22 @@
 package ru.tbank.di.replacer;
 
-import java.util.*;
+import java.util.ArrayDeque;
 
-public final class FifoReplacer {
-    private final ArrayDeque<Integer> queue = new ArrayDeque<>();
+public final class FifoReplacer<T> {
+    private final ArrayDeque<T> queue = new ArrayDeque<>();
 
-    public void add(int pageId) {
-        queue.addLast(pageId);
-    }
-
-    public void remove(int pageId) {
-        queue.remove(pageId);
-    }
-
-    public Integer evictCandidate() {
-        Integer victim = queue.pollFirst();
-        if (victim != null) {
-            queue.remove(victim);
+    public void add(T page) {
+        if (queue.contains(page)) {
+            return;
         }
-        return victim;
+        queue.addLast(page);
+    }
+
+    public void remove(T page) {
+        queue.remove(page);
+    }
+
+    public T evictCandidate() {
+        return queue.pollFirst();
     }
 }

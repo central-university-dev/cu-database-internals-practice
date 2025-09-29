@@ -44,6 +44,8 @@ public final class HeapPage implements Page {
     private int slotCount() { return buf.getShort(16) & 0xFFFF; }
     private void setSlotCount(int v) { buf.putShort(16, (short) v); }
 
+    public int getSlotCount() { return slotCount(); }
+
     @Override public int getFreeSpace() { return upper() - lower(); }
 
     @Override public byte[] toBytes() {
@@ -78,6 +80,23 @@ public final class HeapPage implements Page {
         byte[] out = new byte[len];
         int p = buf.position(); buf.position(off); buf.get(out); buf.position(p);
         return out;
+    }
+
+    public void update(int idx, byte[] row) {
+        if (idx < 0 || idx >= slotCount()) throw new IndexOutOfBoundsException();
+        int slotPos = HEADER_SIZE + idx * SLOT_SIZE;
+        int off = buf.getShort(slotPos) & 0xFFFF;
+        int len = buf.getShort(slotPos + 2) & 0xFFFF;
+        if (len == (LEN_DELETED & 0xFFFF)) {
+            throw new IllegalStateException("cannot update deleted slot");
+        }
+        if (len != row.length) {
+            throw new IllegalArgumentException("updated row must have the same length");
+        }
+        int p = buf.position();
+        buf.position(off);
+        buf.put(row);
+        buf.position(p);
     }
 
     public void delete(int idx) {
