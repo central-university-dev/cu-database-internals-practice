@@ -28,7 +28,6 @@ public final class CatalogManager {
     private static final String COLUMN_DEFINITIONS_FILE = "column_definitions.dat";
     private static final String TYPE_DEFINITIONS_FILE = "types_definitions.dat";
 
-    private final Path catalogDir;
     private final Path dataDir;
     private final MinimalBufferManager bufferManager;
     private final Path typeCatalogFile;
@@ -60,7 +59,7 @@ public final class CatalogManager {
         this.bufferManager = Objects.requireNonNull(bufferManager, "bufferManager");
         Objects.requireNonNull(baseDir, "baseDir");
         Path normalizedBase = baseDir.toAbsolutePath().normalize();
-        this.catalogDir = normalizedBase.resolve(DEFAULT_CATALOG_DIR);
+        Path catalogDir = normalizedBase.resolve(DEFAULT_CATALOG_DIR);
         this.dataDir = normalizedBase.resolve(DEFAULT_DATA_DIR);
 
         Files.createDirectories(catalogDir);
